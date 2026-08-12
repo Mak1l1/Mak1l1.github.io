@@ -1,0 +1,192 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>KILI 發卡機</title>
+<link rel="manifest" href="manifest.webmanifest">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="KILI">
+<meta name="theme-color" content="#111318">
+<link rel="apple-touch-icon" href="icon-180.png">
+<meta name="robots" content="noindex, nofollow">
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+  body {
+    background: #111318; color: #e9eaee; min-height: 100dvh;
+    font-family: -apple-system, BlinkMacSystemFont, "Noto Sans TC", sans-serif;
+    display: flex; flex-direction: column;
+    padding: env(safe-area-inset-top) 20px calc(env(safe-area-inset-bottom) + 20px);
+  }
+  header { display: flex; justify-content: space-between; align-items: baseline; padding: 22px 0 8px; }
+  h1 { font-size: 15px; font-weight: 600; letter-spacing: .04em; }
+  .ver { font-size: 11px; color: #6b7280; font-variant-numeric: tabular-nums; }
+  main { flex: 1; display: flex; flex-direction: column; justify-content: center; gap: 20px; }
+  .qr {
+    background: #fff; border-radius: 20px; padding: 18px;
+    aspect-ratio: 1; width: 100%; max-width: 340px; margin: 0 auto;
+    display: flex; align-items: center; justify-content: center;
+  }
+  .qr img { width: 100%; height: 100%; display: block; image-rendering: pixelated; }
+  .slot { text-align: center; font-variant-numeric: tabular-nums; }
+  .slot b { font-size: 40px; font-weight: 700; letter-spacing: .02em; }
+  .slot span { display: block; font-size: 12px; color: #6b7280; margin-top: 4px; letter-spacing: .12em; }
+  .rarity { color: #9aa0a6; font-size: 13px; letter-spacing: .16em; text-align: center; }
+  button {
+    font: inherit; border: 0; border-radius: 14px; padding: 16px; width: 100%;
+    background: #2563eb; color: #fff; font-weight: 600; font-size: 16px; cursor: pointer;
+  }
+  button.ghost { background: #1c1f26; color: #9aa0a6; font-size: 14px; padding: 12px; font-weight: 500; }
+  button:disabled { opacity: .35; }
+  .row { display: flex; gap: 10px; }
+  .bar { height: 3px; background: #1c1f26; border-radius: 2px; overflow: hidden; }
+  .bar i { display: block; height: 100%; background: #2563eb; width: 0; transition: width .2s; }
+  footer { display: flex; flex-direction: column; gap: 10px; padding-top: 14px; }
+  .meta { display: flex; justify-content: space-between; font-size: 12px; color: #6b7280; font-variant-numeric: tabular-nums; }
+  .empty { text-align: center; color: #9aa0a6; font-size: 14px; line-height: 1.7; }
+  input[type=file] { display: none; }
+  /* footer 的 display:flex 會蓋掉 hidden 屬性的預設樣式，這行把它拉回來 */
+  [hidden] { display: none !important; }
+  .done { text-align: center; font-size: 15px; line-height: 1.8; }
+</style>
+</head>
+<body>
+<header><h1>KILI 發卡機</h1><span class="ver" id="ver">—</span></header>
+
+<main id="main"></main>
+
+<footer id="footer" hidden>
+  <div class="bar"><i id="bar"></i></div>
+  <div class="meta"><span id="count">—</span><span id="left">—</span></div>
+  <div class="row">
+    <button class="ghost" id="undo">撤銷上一張</button>
+    <button class="ghost" id="export">匯出紀錄</button>
+  </div>
+</footer>
+
+<script>
+(function () {
+  "use strict";
+
+  // 卡池是私有資料，不放在這個頁面裡——這頁託管在公開站台，本身不含任何秘密。
+  // 卡池由你手動匯入一次，之後只存在這台裝置的 localStorage。
+  var POOL_KEY = "kili.pool";
+  var ISSUED_KEY = "kili.issued";
+
+  var main = document.getElementById("main");
+  var footer = document.getElementById("footer");
+
+  function readJSON(key, fallback) {
+    try { return JSON.parse(localStorage.getItem(key)) || fallback; }
+    catch (e) { return fallback; }
+  }
+  function writeJSON(key, value) { localStorage.setItem(key, JSON.stringify(value)); }
+
+  var pool = readJSON(POOL_KEY, null);
+  var issued = readJSON(ISSUED_KEY, []);
+
+  function issuedSlots() { return new Set(issued.map(function (r) { return r.slot; })); }
+
+  function next() {
+    var done = issuedSlots();
+    for (var i = 0; i < pool.cards.length; i++) {
+      if (!done.has(pool.cards[i].slot)) return pool.cards[i];
+    }
+    return null;
+  }
+
+  function importScreen() {
+    footer.hidden = true;
+    main.innerHTML =
+      '<p class="empty">還沒有卡池。<br>從私有 repo 拿 dispenser JSON 匯入。</p>' +
+      '<button id="pick">匯入卡池</button>' +
+      '<input type="file" id="file" accept="application/json,.json">';
+    var file = document.getElementById("file");
+    document.getElementById("pick").onclick = function () { file.click(); };
+    file.onchange = function () {
+      var f = file.files[0];
+      if (!f) return;
+      var reader = new FileReader();
+      reader.onload = function () {
+        try {
+          var data = JSON.parse(reader.result);
+          if (!data.cards || !data.cards.length) throw new Error("格式不符");
+          pool = data;
+          writeJSON(POOL_KEY, pool);
+          render();
+        } catch (err) {
+          alert("匯入失敗：" + err.message);
+        }
+      };
+      reader.readAsText(f);
+    };
+  }
+
+  function render() {
+    if (!pool) return importScreen();
+
+    document.getElementById("ver").textContent = pool.version;
+    footer.hidden = false;
+
+    var card = next();
+    var n = issued.length;
+    var total = pool.total || pool.cards.length;
+    document.getElementById("count").textContent = "已發 " + n + " / " + total;
+    document.getElementById("left").textContent = "剩 " + (total - n);
+    document.getElementById("bar").style.width = (n / total * 100) + "%";
+    document.getElementById("undo").disabled = n === 0;
+
+    if (!card) {
+      main.innerHTML = '<p class="done">' + pool.version + ' 全數發完。<br>建立新的 Version 吧。</p>';
+      return;
+    }
+
+    main.innerHTML =
+      '<div class="qr"><img alt="" src="' + card.qr + '"></div>' +
+      '<div class="slot"><b>' + String(card.slot).padStart(3, "0") + '</b>' +
+      '<span>' + card.rarity + '　·　' + total + ' 張限定</span></div>' +
+      '<button id="mark">已發出這張</button>';
+
+    document.getElementById("mark").onclick = function () {
+      issued.push({ slot: card.slot, rarity: card.rarity, at: new Date().toISOString() });
+      writeJSON(ISSUED_KEY, issued);
+      render();
+    };
+  }
+
+  document.getElementById("undo").onclick = function () {
+    if (!issued.length) return;
+    var last = issued[issued.length - 1];
+    if (!confirm("撤銷第 " + String(last.slot).padStart(3, "0") + " 張？")) return;
+    issued.pop();
+    writeJSON(ISSUED_KEY, issued);
+    render();
+  };
+
+  // 裝置是唯一權威，所以匯出要方便——回家把這個檔 commit 進私有 repo 就是備份。
+  document.getElementById("export").onclick = function () {
+    var blob = new Blob(
+      [JSON.stringify({ version: pool ? pool.version : null, issued: issued }, null, 2)],
+      { type: "application/json" }
+    );
+    var a = document.createElement("a");
+    a.href = URL.createObjectURL(blob);
+    a.download = "issued-" + (pool ? pool.version : "unknown") + "-" +
+      new Date().toISOString().slice(0, 10) + ".json";
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+  };
+
+  render();
+
+  if ("serviceWorker" in navigator) {
+    navigator.serviceWorker.register("sw.js").catch(function (e) {
+      console.warn("[kili] service worker failed:", e);
+    });
+  }
+})();
+</script>
+</body>
+</html>
