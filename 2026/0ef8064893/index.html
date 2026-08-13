@@ -77,6 +77,32 @@
 
   // 按鈕放在卡片外面的頁面空白處：卡片的版面一個像素都不動，
   // 而手機上沒有游標也沒有 tooltip，提示本來就必須是看得見、按得到的東西。
+  // 抽卡動畫抖完才會走到這一頁，卡片不該「啪」一聲就在那裡。
+  // bundler 換掉 documentElement 的那一刻內容才存在，淡入從那時起算——
+  // MutationObserver 的回呼跑在該次變動之後、繪製之前，所以先壓成透明不會閃。
+  var fadedBody = null;
+  function fadeIn() {
+    var body = document.body;
+    // 記住是「哪一個 body」淡過，不是「淡過沒有」：bundler 之前那個 body 只有
+    // 佔位圖，對它淡入等於把旗標用掉，真正的卡片就再也不會淡。
+    if (!body || fadedBody === body) return;
+    if (!document.getElementById("dc-root")) return;  // 卡片本體還沒上場
+    fadedBody = body;
+    body.style.opacity = "0";
+    body.style.transition = "opacity 900ms ease-out";
+
+    // requestAnimationFrame 在分頁不可見時不會觸發（實測）。抽完卡順手切走
+    // App 的人回來會看到一張全透明的卡，所以補一個一定會到的計時器。
+    var shown = false;
+    function show() {
+      if (shown) return;
+      shown = true;
+      body.style.opacity = "1";
+    }
+    requestAnimationFrame(function () { requestAnimationFrame(show); });
+    setTimeout(show, 250);
+  }
+
   function bind() {
     if (document.getElementById("kili-save")) return true;
     if (!document.body || !document.body.firstElementChild) return false;
@@ -96,10 +122,12 @@
 
   // bundler 會整個換掉 documentElement，所以按鈕要在那之後才掛，
   // 而且被換掉時要能自己長回來。
-  new MutationObserver(function () { bind(); }).observe(document, {
-    childList: true, subtree: true,
-  });
-  document.addEventListener("DOMContentLoaded", bind);
+  // 淡入要獨立於按鈕之外呼叫：按鈕掛好之後 bind() 會提早 return，
+  // 而 #dc-root 常常比按鈕晚一步出現——擠在同一個函式裡就會錯過那一拍。
+  function tick() { fadeIn(); bind(); }
+
+  new MutationObserver(tick).observe(document, { childList: true, subtree: true });
+  document.addEventListener("DOMContentLoaded", tick);
 })();
 </script>
 </head>
